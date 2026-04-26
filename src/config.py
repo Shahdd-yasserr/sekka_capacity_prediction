@@ -6,7 +6,9 @@ Import from here in every other module — never duplicate these values.
 """
 
 from pathlib import Path
-
+ROOT_DIR = Path(__file__).parent.parent
+MODEL_DIR = ROOT_DIR / "models"
+LIVE_MODEL_PATH = MODEL_DIR / "metro_capacity_model_live.txt"
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
