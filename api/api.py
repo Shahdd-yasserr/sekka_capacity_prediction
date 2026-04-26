@@ -1,4 +1,4 @@
-# sekka_api.py - Clean, Professional, Full Cairo Metro Capacity API
+
 """
 Sekka Metro Capacity API
 Real-time capacity predictions for Cairo Metro (Lines 1, 2, 3)
@@ -13,9 +13,8 @@ import pandas as pd
 import numpy as np
 import lightgbm as lgb
 
-# ============================================================
 # CONFIGURATION
-# ============================================================
+
 MAX_CAPACITY = 100
 SEAT_CAPACITY = 40
 
@@ -30,12 +29,10 @@ for s in range(301, 346): STATION_LINE_MAP[s] = 3
 # Interchange stations (high traffic)
 INTERCHANGE_STATIONS = {119, 120, 122, 208, 209, 211, 215, 313, 319, 320, 324, 332, 335}
 
-# Model path (using your actual model file name)
 MODEL_PATH = Path("models") / "metro_capacity_model_live.txt"
 
-# ============================================================
 # MODEL LOADER
-# ============================================================
+
 class MetroPredictor:
     def __init__(self):
         self.model = None
@@ -44,9 +41,9 @@ class MetroPredictor:
     def _load_model(self):
         if MODEL_PATH.exists():
             self.model = lgb.Booster(model_file=str(MODEL_PATH))
-            print(f"✅ Model loaded from {MODEL_PATH}")
+            print(f" Model loaded from {MODEL_PATH}")
         else:
-            print(f"⚠️ No model found at {MODEL_PATH} – using fallback")
+            print(f"No model found at {MODEL_PATH} – using fallback")
 
     def _fallback_prediction(self, hour, day_of_week):
         base = 35
@@ -96,9 +93,9 @@ class MetroPredictor:
             'seats_available': 'YES' if predicted < SEAT_CAPACITY else 'NO'
         }
 
-# ============================================================
+
 # FASTAPI APP
-# ============================================================
+
 app = FastAPI(
     title="Sekka Metro Capacity API",
     description="Real‑time capacity predictions for Cairo Metro (Lines 1,2,3)",
@@ -114,9 +111,9 @@ app.add_middleware(
 
 predictor = MetroPredictor()
 
-# ============================================================
+
 # API ENDPOINTS
-# ============================================================
+
 @app.get("/")
 def root():
     return {
@@ -166,17 +163,17 @@ def predict_line(line_number: int):
     line_stations = [s for s in STATIONS if STATION_LINE_MAP.get(s) == line_number]
     return [predictor.predict(sid) for sid in line_stations]
 
-# ============================================================
+
 # RUN SERVER
-# ============================================================
+
 if __name__ == "__main__":
     import uvicorn
     print("\n" + "=" * 60)
-    print("🚇 SEKKA METRO CAPACITY API")
+    print("SEKKA METRO CAPACITY API")
     print("=" * 60)
-    print("📍 Server: http://127.0.0.1:8000")
-    print("📚 Docs:   http://127.0.0.1:8000/docs")
-    print("🎯 Test:   http://127.0.0.1:8000/predict/119")
+    print(" Server: http://127.0.0.1:8000")
+    print(" Docs:   http://127.0.0.1:8000/docs")
+    print(" Test:   http://127.0.0.1:8000/predict/119")
     print("=" * 60 + "\n")
     uvicorn.run(app, host="127.0.0.1", port=8000)
     
