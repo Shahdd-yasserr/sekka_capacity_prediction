@@ -1,29 +1,9 @@
+# src/capacity_predictor.py
 """
-capacity_predictor.py
-=====================
-Responsible for:
-  - Loading the live model produced by model_trainer.py
-  - Serving fast, batched predictions using REAL lag features from SensorBuffer
-  - Monitoring recent MAE for drift detection
-  - Triggering retraining automatically (volume / time / drift)
-  - Handling offline stations gracefully via interpolation
-  - Exporting predictions as JSON for the Flutter app
+CapacityPredictor – loads the live LightGBM model and serves predictions.
+Uses real lag features from SensorBuffer.
 
-Typical usage
--------------
-    predictor = CapacityPredictor().load()
-
-    # Feed a sensor reading
-    predictor.ingest({"station_id": 119, "people_count": 72, "timestamp": "2025-01-01 08:00"})
-
-    # Get prediction for one station (uses real lag values)
-    result = predictor.predict_one(119)
-
-    # Batch prediction
-    results = predictor.predict_batch([119, 209, 313])
-
-    # Export for Flutter
-    predictor.export_json()
+All paths are resolved relative to the project root via config.py.
 """
 
 import json
@@ -37,7 +17,8 @@ import numpy as np
 import pandas as pd
 from sklearn.metrics import mean_absolute_error
 
-from config import (
+# Imports from the same src/ folder
+from .config import (
     ALL_STATION_IDS,
     CATEGORICAL_FEATURES,
     INTERCHANGE_STATIONS,
@@ -50,62 +31,54 @@ from config import (
     SEAT_CAPACITY,
     STATION_LINE_MAP,
 )
-from sensor_buffer import SensorBuffer
+from .sensor_buffer import SensorBuffer
 
 logger = logging.getLogger(__name__)
 
 
-# ---------------------------------------------------------------------------
-# Feature row builder  (inference-time — uses real lag from buffer)
-# ---------------------------------------------------------------------------
-
 def _build_feature_row(
-    station_id:   int,
-    hour:         int,
-    minute:       int,
-    day_of_week:  int,
-    lag_features: dict,           # real values from StationLagCache
-    day_hour_avg: float = 30.0,   # global average for this (dow, hour) pair
+    station_id: int,
+    hour: int,
+    minute: int,
+    day_of_week: int,
+    lag_features: dict,  # real values from StationLagCache
+    day_hour_avg: float = 30.0,
 ) -> dict:
     """Build a single flat feature dict for one station at one point in time."""
     is_morning_peak = int(7 <= hour <= 9)
     is_evening_peak = int(17 <= hour <= 19)
 
     return {
-        "hour":            hour,
-        "minute":          minute,
-        "day_of_week":     day_of_week,
-        "is_weekend":      int(day_of_week in (4, 5)),
-        "hour_sin":        np.sin(2 * np.pi * hour / 24),
-        "hour_cos":        np.cos(2 * np.pi * hour / 24),
-        "dow_sin":         np.sin(2 * np.pi * day_of_week / 7),
-        "dow_cos":         np.cos(2 * np.pi * day_of_week / 7),
+        "hour": hour,
+        "minute": minute,
+        "day_of_week": day_of_week,
+        "is_weekend": int(day_of_week in (4, 5)),
+        "hour_sin": np.sin(2 * np.pi * hour / 24),
+        "hour_cos": np.cos(2 * np.pi * hour / 24),
+        "dow_sin": np.sin(2 * np.pi * day_of_week / 7),
+        "dow_cos": np.cos(2 * np.pi * day_of_week / 7),
         "is_morning_peak": is_morning_peak,
         "is_evening_peak": is_evening_peak,
-        "is_peak":         int(bool(is_morning_peak or is_evening_peak)),
+        "is_peak": int(is_morning_peak or is_evening_peak),
         "is_friday_prayer": int(day_of_week == 4 and 12 <= hour <= 14),
-        "is_interchange":  int(station_id in INTERCHANGE_STATIONS),
-        "station_id":      station_id,
-        "line_number":     STATION_LINE_MAP.get(station_id, 1),
-        "day_hour_avg":    day_hour_avg,
+        "is_interchange": int(station_id in INTERCHANGE_STATIONS),
+        "station_id": station_id,
+        "line_number": STATION_LINE_MAP.get(station_id, 1),
+        "day_hour_avg": day_hour_avg,
         "station_hour_avg": lag_features.get("rolling_1h_mean", 30.0),
-        **lag_features,   # people_count_lag_1/3/8, rolling_1h_mean, rolling_2h_mean
+        **lag_features,  # people_count_lag_1/3/8, rolling_1h_mean, rolling_2h_mean
     }
 
 
-# ---------------------------------------------------------------------------
-# CapacityPredictor
-# ---------------------------------------------------------------------------
-
 class CapacityPredictor:
     """
-    Loads the live LightGBM model and serves real-time capacity predictions.
+    Loads the live LightGBM model and serves real‑time capacity predictions.
 
     Parameters
     ----------
     model_path : path to the live .txt model file (default: config.LIVE_MODEL_PATH)
-    meta_path  : path to the .pkl metadata file   (default: config.META_PATH)
-    buffer     : SensorBuffer instance (loads from disk if None)
+    meta_path   : path to the .pkl metadata file   (default: config.META_PATH)
+    buffer      : SensorBuffer instance (loads from disk if None)
     """
 
     def __init__(
@@ -114,20 +87,16 @@ class CapacityPredictor:
         meta_path=META_PATH,
         buffer: Optional[SensorBuffer] = None,
     ) -> None:
-        self.model_path   = model_path
-        self.meta_path    = meta_path
-        self.model:        Optional[lgb.Booster] = None
-        self.feature_cols: Optional[list[str]]   = None
-        self.buffer:       SensorBuffer          = buffer or SensorBuffer.load()
+        self.model_path = model_path
+        self.meta_path = meta_path
+        self.model: Optional[lgb.Booster] = None
+        self.feature_cols: Optional[list[str]] = None
+        self.buffer = buffer if buffer is not None else SensorBuffer.load()
 
         # rolling window of (actual, predicted) pairs for drift monitoring
-        self._recent_actuals:    list[float] = []
-        self._recent_predicted:  list[float] = []
-        self._drift_window_size: int         = 500   # last N predictions to check MAE
-
-    # ------------------------------------------------------------------
-    # Loading / reloading
-    # ------------------------------------------------------------------
+        self._recent_actuals: list[float] = []
+        self._recent_predicted: list[float] = []
+        self._drift_window_size: int = 500
 
     def load(self) -> "CapacityPredictor":
         """Load model weights and metadata. Returns self for chaining."""
@@ -142,14 +111,14 @@ class CapacityPredictor:
             meta = pickle.load(f)
         self.feature_cols = meta["feature_cols"]
 
-        print(f"✅ Model loaded   → {self.model_path}")
-        print(f"✅ Metadata loaded → {self.meta_path}")
-        print(f"   Features: {len(self.feature_cols)}")
+        logger.info("✅ Model loaded from %s", self.model_path)
+        logger.info("✅ Metadata loaded from %s", self.meta_path)
+        logger.info("   Features: %d", len(self.feature_cols))
         return self
 
     def reload(self) -> None:
-        """Hot-reload the live model from disk (called after a successful retrain)."""
-        self.model        = lgb.Booster(model_file=str(self.model_path))
+        """Hot‑reload the live model from disk (called after a successful retrain)."""
+        self.model = lgb.Booster(model_file=str(self.model_path))
         with open(self.meta_path, "rb") as f:
             meta = pickle.load(f)
         self.feature_cols = meta["feature_cols"]
@@ -160,37 +129,28 @@ class CapacityPredictor:
             raise RuntimeError("Model not loaded. Call CapacityPredictor.load() first.")
 
     # ------------------------------------------------------------------
-    # Sensor ingestion (entry point for live data)
+    # Ingest & drift monitoring
     # ------------------------------------------------------------------
-
     def ingest(self, payload: dict) -> dict:
-        """
-        Validate and store one sensor reading.
-
-        Also checks all three retrain triggers and fires retraining if needed.
-        Returns the ingestion result dict from SensorBuffer.
-        """
+        """Validate and store one sensor reading. Returns ingestion result dict."""
         result = self.buffer.ingest(payload)
 
         if result["status"] == "ok":
             # record actual for drift monitoring
             count = result["row"]["people_count"]
-            sid   = result["row"]["station_id"]
-            ts    = result["row"]["timestamp"]
+            sid = result["row"]["station_id"]
+            ts = result["row"]["timestamp"]
 
-            # try to get a prediction for this reading to compute live MAE
             try:
                 pred = self.predict_one(sid, ts.hour, ts.minute, ts.weekday())
                 self._recent_actuals.append(count)
                 self._recent_predicted.append(pred["predicted_count"])
-                # keep window bounded
                 if len(self._recent_actuals) > self._drift_window_size:
                     self._recent_actuals.pop(0)
                     self._recent_predicted.pop(0)
             except Exception:
                 pass
 
-            # check retrain triggers
             self._check_retrain_triggers()
 
         return result
@@ -200,10 +160,6 @@ class CapacityPredictor:
         summary = self.buffer.ingest_batch(payloads)
         self._check_retrain_triggers()
         return summary
-
-    # ------------------------------------------------------------------
-    # Drift monitoring
-    # ------------------------------------------------------------------
 
     @property
     def recent_mae(self) -> Optional[float]:
@@ -217,17 +173,14 @@ class CapacityPredictor:
         return mae is not None and mae > MAE_DRIFT_THRESHOLD
 
     # ------------------------------------------------------------------
-    # Retrain triggers
+    # Retrain triggers (imported here to avoid circular imports)
     # ------------------------------------------------------------------
-
     def _check_retrain_triggers(self) -> None:
-        """Evaluate all three retrain triggers and fire if any is met."""
-        # import here to avoid circular imports at module level
-        from model_trainer import full_retrain_from_buffer, incremental_retrain
+        from .model_trainer import full_retrain_from_buffer, incremental_retrain
 
         mae = self.recent_mae
 
-        # --- drift: severe — full retrain ---
+        # severe drift → full retrain
         if mae is not None and mae > MAE_DRIFT_THRESHOLD * 1.5:
             logger.warning("Severe drift (MAE=%.2f). Triggering full retrain.", mae)
             new_model = full_retrain_from_buffer(self.buffer)
@@ -236,7 +189,7 @@ class CapacityPredictor:
                 self.buffer.save()
             return
 
-        # --- volume or time trigger: incremental warm-start ---
+        # volume or time or mild drift → incremental retrain
         if (
             self.buffer.should_retrain_volume(RETRAIN_EVERY_N_ROWS)
             or self.buffer.should_retrain_time(RETRAIN_EVERY_HOURS)
@@ -249,47 +202,40 @@ class CapacityPredictor:
             self.buffer.save()
 
     # ------------------------------------------------------------------
-    # Core prediction (batched)
+    # Predictions
     # ------------------------------------------------------------------
-
     def predict_batch(
         self,
-        station_ids:  list[int],
-        hour:         Optional[int] = None,
-        minute:       Optional[int] = None,
-        day_of_week:  Optional[int] = None,
+        station_ids: list[int],
+        hour: Optional[int] = None,
+        minute: Optional[int] = None,
+        day_of_week: Optional[int] = None,
     ) -> list[dict]:
         """
-        Predict capacity for multiple stations in a single model.predict() call.
-        Uses REAL lag features from SensorBuffer for each station.
-
-        Offline stations are handled via interpolation.
-
+        Predict capacity for multiple stations using real lag features.
         Returns list of dicts with:
-          timestamp, carriage_id, predicted_count, capacity_percent, seats_available
+          timestamp, carriage_id, predicted_count, capacity_percent, seats_available, is_offline
         """
         self._ensure_loaded()
         if not station_ids:
             return []
 
-        now         = datetime.now()
-        hour        = hour        if hour        is not None else now.hour
-        minute      = minute      if minute      is not None else now.minute
+        now = datetime.now()
+        hour = hour if hour is not None else now.hour
+        minute = minute if minute is not None else now.minute
         day_of_week = day_of_week if day_of_week is not None else now.weekday()
-        ts_str      = now.strftime("%Y-%m-%d %H:%M:%S")
-        ts          = pd.Timestamp(now)
+        ts_str = now.strftime("%Y-%m-%d %H:%M:%S")
+        ts = pd.Timestamp(now)
 
-        # check dropouts
+        # check for offline stations
         offline = self.buffer.check_dropouts(station_ids, ts)
         if offline:
             logger.warning("Offline stations: %s — using interpolated counts.", offline)
 
-        # build one feature row per station
         rows = []
         for sid in station_ids:
             lag_feats = self.buffer.lag_cache.get_lag_features(sid)
 
-            # for offline stations, override lag with interpolated value
             if sid in offline:
                 interp = self.buffer.interpolate_dropout(sid, ts)
                 for k in lag_feats:
@@ -300,7 +246,7 @@ class CapacityPredictor:
 
         X = pd.DataFrame(rows)
 
-        # fill any one-hot columns the model expects but are absent in this batch
+        # fill any one‑hot columns the model expects but are absent in this batch
         for col in self.feature_cols:
             if col not in X.columns and (col.startswith("type_") or col.startswith("zone_")):
                 X[col] = 0
@@ -309,69 +255,67 @@ class CapacityPredictor:
         for col in CATEGORICAL_FEATURES:
             X[col] = X[col].astype("category")
 
-        # single batched inference
         counts = self.model.predict(X)
 
         results = []
         for sid, count in zip(station_ids, counts):
             count = max(0.0, float(count))
-            results.append({
-                "timestamp":        ts_str,
-                "carriage_id":      sid,
-                "predicted_count":  int(round(count)),
-                "capacity_percent": round((count / MAX_CAPACITY) * 100, 1),
-                "seats_available":  "YES" if count < SEAT_CAPACITY else "NO",
-                "is_offline":       sid in offline,
-            })
+            results.append(
+                {
+                    "timestamp": ts_str,
+                    "carriage_id": sid,
+                    "predicted_count": int(round(count)),
+                    "capacity_percent": round((count / MAX_CAPACITY) * 100, 1),
+                    "seats_available": "YES" if count < SEAT_CAPACITY else "NO",
+                    "is_offline": sid in offline,
+                }
+            )
 
         return results
 
     def predict_one(
         self,
-        station_id:  int,
-        hour:        Optional[int] = None,
-        minute:      Optional[int] = None,
+        station_id: int,
+        hour: Optional[int] = None,
+        minute: Optional[int] = None,
         day_of_week: Optional[int] = None,
     ) -> dict:
         """Convenience wrapper for a single station."""
         return self.predict_batch([station_id], hour, minute, day_of_week)[0]
 
     # ------------------------------------------------------------------
-    # Reporting / demo
+    # Reporting & demo
     # ------------------------------------------------------------------
-
     def demo(self, station_ids: Optional[list[int]] = None) -> None:
         station_ids = station_ids or [119, 209, 313, 101, 215, 301, 335]
-        results     = self.predict_batch(station_ids)
+        results = self.predict_batch(station_ids)
 
         print("\n" + "=" * 75)
-        print("🚇 SEKKA CAPACITY PREDICTIONS")
+        print(" SEKKA CAPACITY PREDICTIONS")
         if self.recent_mae is not None:
-            print(f"   Recent MAE: {self.recent_mae:.2f} people  "
-                  f"{'⚠️  DRIFTING' if self.is_drifting() else '✅ Healthy'}")
+            print(f"   Recent MAE: {self.recent_mae:.2f} people  {' DRIFTING' if self.is_drifting() else ' Healthy'}")
         print("=" * 75)
-        print(f"\n{'ID':<6} {'Timestamp':<20} {'Capacity %':<12} {'Seats':<8} "
-              f"{'Count':<8} {'Offline?'}")
+        print(f"\n{'ID':<6} {'Timestamp':<20} {'Capacity %':<12} {'Seats':<8} {'Count':<8} {'Offline?'}")
         print("-" * 75)
         for r in results:
-            offline_tag = "⚠️ offline" if r["is_offline"] else ""
+            offline_tag = " offline" if r["is_offline"] else ""
             print(
                 f"{r['carriage_id']:<6} {r['timestamp']:<20} "
                 f"{r['capacity_percent']:<12}% {r['seats_available']:<8} "
-                f"{r['predicted_count']:<8} {offline_tag}"
+                f"{r['predicted_count']:<8}{offline_tag}"
             )
         print("-" * 75)
 
     def demo_time_variations(self, station_id: int = 119) -> None:
         scenarios = [
-            (8,  0, 0, "Morning Peak (Mon 8 AM)"),
+            (8, 0, 0, "Morning Peak (Mon 8 AM)"),
             (13, 0, 4, "Friday Prayer (1 PM)"),
             (18, 0, 0, "Evening Peak (Mon 6 PM)"),
             (23, 0, 5, "Late Night (Sat 11 PM)"),
             (10, 0, 2, "Mid-morning (Wed 10 AM)"),
         ]
         print(f"\n{'='*60}")
-        print(f"📅 TIME VARIATIONS – STATION {station_id}")
+        print(f" TIME VARIATIONS – STATION {station_id}")
         print(f"{'='*60}")
         print(f"\n{'Scenario':<30} {'Capacity %':<12} {'Seats':<8} Count")
         print("-" * 55)
@@ -387,40 +331,32 @@ class CapacityPredictor:
         print(f"Buffer rows      : {self.buffer.get_window_size():,}")
         print(f"Rows ingested    : {self.buffer.rows_ingested:,}")
         print(f"Rows since retrain: {self.buffer.rows_since_retrain:,}")
-        last = self.buffer._last_retrain_time
+        last = getattr(self.buffer, '_last_retrain_time', None)
         print(f"Last retrain     : {last.strftime('%Y-%m-%d %H:%M') if last else 'never'}")
         mae = self.recent_mae
-        print(f"Recent MAE       : {f'{mae:.2f} people' if mae else 'not enough data'}")
-        print(f"Drifting         : {'⚠️  YES' if self.is_drifting() else '✅ No'}")
-
-    # ------------------------------------------------------------------
-    # Export
-    # ------------------------------------------------------------------
+        print(f"Recent MAE       : {f'{mae:.2f} people' if mae is not None else 'not enough data'}")
+        print(f"Drifting         : {' YES' if self.is_drifting() else ' No'}")
 
     def export_json(
         self,
         station_ids: Optional[list[int]] = None,
-        filename:    str = "sekka_app_data.json",
+        filename: str = "sekka_app_data.json",
     ) -> list[dict]:
         """Export current predictions to JSON for the Flutter app."""
         station_ids = station_ids or [119, 209, 313, 101, 215, 301, 335]
-        results     = self.predict_batch(station_ids)
+        results = self.predict_batch(station_ids)
 
         with open(filename, "w", encoding="utf-8") as f:
             json.dump(results, f, indent=2)
 
-        print(f"\n✅ Exported {len(results)} predictions → '{filename}'")
+        print(f"\n📁 Exported {len(results)} predictions → '{filename}'")
         return results
 
-
-# ---------------------------------------------------------------------------
-# Entry point
-# ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     print("=" * 70)
-    print("🚇 SEKKA – CAPACITY PREDICTOR")
+    print(" SEKKA – CAPACITY PREDICTOR (STANDALONE TEST)")
     print("=" * 70)
 
     predictor = CapacityPredictor().load()
