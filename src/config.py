@@ -6,21 +6,23 @@ Import from here in every other module — never duplicate these values.
 """
 
 from pathlib import Path
+import os
+
+# ---------------------------------------------------------------------------
+# Project root (where api/, src/, models/ live)
+# ---------------------------------------------------------------------------
 ROOT_DIR = Path(__file__).parent.parent
+
+# ---------------------------------------------------------------------------
+# Paths – all directories relative to ROOT_DIR
+# ---------------------------------------------------------------------------
 MODEL_DIR = ROOT_DIR / "models"
-LIVE_MODEL_PATH = MODEL_DIR / "metro_capacity_model_live.txt"
-# ---------------------------------------------------------------------------
-# Paths
-# ---------------------------------------------------------------------------
-MODEL_DIR = Path("models")
 MODEL_DIR.mkdir(exist_ok=True)
 
 BUFFER_PATH   = MODEL_DIR / "sensor_buffer.pkl"
 META_PATH     = MODEL_DIR / "metro_model_meta.pkl"
-REGISTRY_PATH = MODEL_DIR / "model_registry.json"   # version log
-
-# Latest "live" model symlink / path (always points to best version)
-LIVE_MODEL_PATH = MODEL_DIR / "metro_capacity_model_live.txt"
+REGISTRY_PATH = MODEL_DIR / "model_registry.json"
+LIVE_MODEL_PATH = MODEL_DIR / "metro_capacity_model_live.txt"   # single definition
 
 # ---------------------------------------------------------------------------
 # Station topology
@@ -40,8 +42,8 @@ ALL_STATION_IDS: list[int] = list(range(100, 140)) + list(range(200, 220)) + lis
 # ---------------------------------------------------------------------------
 # Capacity thresholds
 # ---------------------------------------------------------------------------
-MAX_CAPACITY  = 100   # people — train is "full" at this number
-SEAT_CAPACITY = 40    # people — seats run out above this
+MAX_CAPACITY  = 100
+SEAT_CAPACITY = 40
 
 # ---------------------------------------------------------------------------
 # Sensor validation rules
@@ -49,24 +51,21 @@ SEAT_CAPACITY = 40    # people — seats run out above this
 SENSOR_SCHEMA: dict = {
     "station_id":   {"type": int,   "min": 100,  "max": 399},
     "people_count": {"type": (int, float), "min": 0, "max": 300},
-    # timestamp validated separately (ISO-8601 string)
 }
-
-# How many consecutive bad readings before a station is flagged as offline
 SENSOR_DROPOUT_THRESHOLD = 5
 
 # ---------------------------------------------------------------------------
 # Buffer / rolling window
 # ---------------------------------------------------------------------------
-ROLLING_WINDOW_DAYS = 30          # keep last N days in the live buffer
-LAG_BUFFER_SIZE     = 16          # readings kept per station for lag features (≥ max lag used)
+ROLLING_WINDOW_DAYS = 30
+LAG_BUFFER_SIZE     = 16
 
 # ---------------------------------------------------------------------------
 # Retraining triggers
 # ---------------------------------------------------------------------------
-RETRAIN_EVERY_N_ROWS   = 10_000   # volume-based trigger
-RETRAIN_EVERY_HOURS    = 6        # time-based trigger
-MAE_DRIFT_THRESHOLD    = 8.0      # drift-based trigger — retrain if recent MAE > this
+RETRAIN_EVERY_N_ROWS   = 10_000
+RETRAIN_EVERY_HOURS    = 6
+MAE_DRIFT_THRESHOLD    = 8.0
 
 # ---------------------------------------------------------------------------
 # LightGBM
@@ -97,25 +96,21 @@ EARLY_STOPPING_ROUNDS: int = 50
 API_HOST: str = "0.0.0.0"
 API_PORT: int = 8000
 
-# API keys — two scopes:
-#   SENSOR_API_KEYS : allowed to POST sensor readings (hardware / IoT devices)
-#   APP_API_KEYS    : allowed to GET predictions (Flutter app, dashboards)
-# In production, load these from environment variables or a secrets manager.
-# Add as many keys as you have clients.
+# ---------------------------------------------------------------------------
+# API keys – placeholder values (must be replaced in production)
+# Use environment variables or a .env file for real deployments.
+# ---------------------------------------------------------------------------
 SENSOR_API_KEYS: set[str] = {
-    "sensor-key-line1-abc123",
-    "sensor-key-line2-def456",
-    "sensor-key-line3-ghi789",
+    "sensor-key-change-me-1",
+    "sensor-key-change-me-2",
 }
 
 APP_API_KEYS: set[str] = {
-    "flutter-app-key-xyz999",
-    "dashboard-key-uvw888",
+    "app-key-change-me-1",
 }
 
-# Both scopes combined (for endpoints that accept either)
 ALL_API_KEYS: set[str] = SENSOR_API_KEYS | APP_API_KEYS
 
 # Rate limiting (requests per minute per API key)
-RATE_LIMIT_SENSOR: int = 120   # sensors post every 7 min → plenty of headroom
-RATE_LIMIT_APP:    int = 60    # Flutter polls ~every 7 min
+RATE_LIMIT_SENSOR: int = 120
+RATE_LIMIT_APP:    int = 60
