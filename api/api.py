@@ -12,15 +12,11 @@ from pathlib import Path
 from typing import Optional
 import sys
 
-# Add project root to path to import src modules
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.capacity_predictor import CapacityPredictor
 from src.config import ALL_STATION_IDS, STATION_LINE_MAP
 
-# ============================================================
-# FASTAPI APP
-# ============================================================
 app = FastAPI(
     title="Sekka Metro Capacity API",
     description="Real‑time capacity predictions for Cairo Metro (Lines 1,2,3)",
@@ -34,12 +30,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Load the real predictor (same as in training)
 predictor = CapacityPredictor().load()
 
-# ============================================================
-# API ENDPOINTS
-# ============================================================
 @app.get("/")
 def root():
     return {
@@ -68,7 +60,6 @@ def get_stations():
         for sid in ALL_STATION_IDS
     ]
 
-# IMPORTANT: exact path before dynamic path
 @app.get("/predict/all")
 def predict_all():
     """Get capacity predictions for all stations"""
@@ -94,16 +85,14 @@ def predict_line(line_number: int):
     line_stations = [sid for sid in ALL_STATION_IDS if STATION_LINE_MAP.get(sid) == line_number]
     return predictor.predict_batch(line_stations)
 
-# ============================================================
-# RUN SERVER
-# ============================================================
+
 if __name__ == "__main__":
     import uvicorn
     print("\n" + "=" * 60)
-    print("🚇 SEKKA METRO CAPACITY API")
+    print(" SEKKA METRO CAPACITY API")
     print("=" * 60)
-    print("📍 Server: http://127.0.0.1:8001")
-    print("📚 Docs:   http://127.0.0.1:8001/docs")
-    print("🎯 Test:   http://127.0.0.1:8001/predict/119")
+    print(" Server: http://127.0.0.1:8001")
+    print(" Docs:   http://127.0.0.1:8001/docs")
+    print(" Test:   http://127.0.0.1:8001/predict/119")
     print("=" * 60 + "\n")
     uvicorn.run(app, host="127.0.0.1", port=8001)
