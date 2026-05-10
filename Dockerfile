@@ -20,8 +20,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy the rest of the application
 COPY . .
 
-# Expose the port Railway uses
-EXPOSE $PORT
+# Expose the fixed port (Railway's target port will be 8000)
+EXPOSE 8000
 
-# Run the FastAPI app
-CMD uvicorn api.api:app --host 0.0.0.0 --port $PORT
+# Run the FastAPI app on a fixed port
+CMD uvicorn api.api:app --host 0.0.0.0 --port 8000
