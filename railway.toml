@@ -1,5 +1,0 @@
-[build]
-nixPkgs = ["gcc", "gfortran", "gomp", "openblas"]
-
-[deploy]
-startCommand = "uvicorn api.api:app --host 0.0.0.0 --port $PORT"
